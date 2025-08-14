@@ -43,7 +43,7 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
     uint256 public requestId;
 
     Tile[TOTAL_TILES] public tiles;
-    mapping(address => Player) public players;
+    Player public player;
 
     struct Tile {
         bool opened;
@@ -52,6 +52,7 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
     }
 
     struct Player {
+        address playerAddress;
         uint256 tilesPurchased;
         uint256 tilesOpened;
         uint256 totalReward;
@@ -83,7 +84,7 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
     }
 
     function initializeGame() external onlyOwner {
-        if (gameInitialized) {
+        if (!gameInitialized) {
             revert TileGame__GameNotInitialized();
         }
 
@@ -165,7 +166,14 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
             revert TileGame__OutOfBalance();
         }
 
-        players[msg.sender].tilesPurchased += n;
+
+        if (player.playerAddress == address(0)) {
+            player.playerAddress = msg.sender; 
+        } else if (player.playerAddress != msg.sender) {
+            revert("Only one player allowed per game"); 
+        }
+
+        player.tilesPurchased += n;
         
         emit TilesPurchased(msg.sender, n);
     }
@@ -175,7 +183,9 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
             revert TileGame__OutOfBounds();
         }
 
-        Player storage player = players[msg.sender];
+        if (player.playerAddress != msg.sender) {
+            revert("Not the current player");
+        }
         
         if (player.tilesPurchased == 0) {
             revert TileGame__NoTilePurchased();
@@ -199,11 +209,11 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
         emit TileOpened(msg.sender, tileIndex, tile.rewardAmount);
 
         if (player.tilesOpened == player.tilesPurchased && !player.rewardWithdrawn) {
-            _withdrawReward(player);
+            _withdrawReward();
         }
     }
 
-    function _withdrawReward(Player storage player) internal {
+    function _withdrawReward() internal {
         uint256 totalAmount = player.totalReward;
         
         if (totalAmount == 0) {
@@ -240,17 +250,29 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
             });
         }
 
+        // Clear all players
+        player = Player({
+            playerAddress: address(0),
+            tilesPurchased: 0,
+            tilesOpened: 0,
+            totalReward: 0,
+            rewardWithdrawn: false
+        });
+
         emit GameReset();
     }
 
     function withdrawReward() external nonReentrant {
-        Player storage player = players[msg.sender];
         
-        if (player.rewardWithdrawn) {
-            revert TileGame__InsufficientContractBalance();
+        if (player.playerAddress != msg.sender) {
+            revert("Not the current player");
         }
 
-        _withdrawReward(player);
+        if (player.rewardWithdrawn) {
+            revert("Reward already withdrawn"); 
+        }
+
+        _withdrawReward();
     }
 
     function fundContract() external payable onlyOwner {}
@@ -275,14 +297,13 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
         return (gameInitialized, randomnessFulfilled, rewardsCalculated, randomSeed);
     }
 
-    function getPlayerInfo(address player) external view returns (
+    function getPlayerInfo() external view returns (
         uint256 tilesPurchased,
         uint256 tilesOpened,
         uint256 totalReward,
         bool rewardWithdrawn
     ) {
-        Player storage p = players[player];
-        return (p.tilesPurchased, p.tilesOpened, p.totalReward, p.rewardWithdrawn);
+        return (player.tilesPurchased , player.tilesOpened, player.totalReward, player.rewardWithdrawn);
     }
 
     function getTileInfo(uint256 tileIndex) external view returns (
@@ -315,6 +336,14 @@ contract TileGame is VRFConsumerBaseV2Plus, ReentrancyGuard {
 
     function getContractBalance() external view returns (uint256) {
         return address(this).balance;
+    }
+
+    function getCurrentPlayer() external view returns (address) {
+        return player.playerAddress;
+    }
+
+    function isPlayerSet() external view returns (bool) {
+        return player.playerAddress != address(0);
     }
 
     function isReadyForStart() external view returns (bool) {
